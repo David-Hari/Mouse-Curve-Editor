@@ -37,6 +37,8 @@ CHAR szTitle[MAX_LOADSTRING];
 HWND graph;
 static Point2d points[5];
 static int dragIndex = -1;
+static HPEN gridLinePen = CreatePen(PS_SOLID, 1, RGB(220, 220, 220));
+static HBRUSH circleBrush = CreateSolidBrush(RGB(100, 100, 100));
 
 
 static double fixedToDouble(uint32_t value) {
@@ -143,16 +145,16 @@ static LSTATUS saveCurveToRegistry() {
 
 static Point2i mapGraphToScreen(RECT rc, Point2d input, Point2d max) {
 	return {
-		(int)((input.x / max.x) * (rc.right - rc.left)),
-		(int)(rc.bottom - (input.y / max.y) * (rc.bottom - rc.top))
+		rc.left + (int)((input.x / max.x) * (rc.right - rc.left)),
+		rc.bottom - (int)((input.y / max.y) * (rc.bottom - rc.top))
 	};
 }
 
 
 static Point2d mapScreenToGraph(RECT rc, Point2i input, Point2d max) {
 	Point2d p;
-	p.x = (input.x / (rc.right - rc.left)) * max.x;
-	p.y = ((rc.bottom - input.y) / (rc.bottom - rc.top)) * max.y;
+	p.x = ((input.x - rc.left) / static_cast<double>(rc.right - rc.left)) * max.x;
+	p.y = ((rc.bottom - input.y) / static_cast<double>(rc.bottom - rc.top)) * max.y;
 	if (p.x < 0) { p.x = 0; }
 	if (p.y < 0) { p.y = 0; }
 	return p;
@@ -164,18 +166,71 @@ static void drawGraph(HDC hdc, RECT rc) {
 	SetBkMode(hdc, TRANSPARENT);
 
 	Point2d max = points[4];
+	SIZE textSize;
+	GetTextExtentPoint32(hdc, "000.0", 5, &textSize);
+	int xTextPad = (int)(textSize.cx * 0.25);
+	int yTextPad = (int)(textSize.cy * 0.25);
+	RECT graphRect = {
+		rc.left + textSize.cx + xTextPad,
+		rc.top + textSize.cy,
+		rc.right - textSize.cx,
+		rc.bottom - textSize.cy - yTextPad
+	};
+	int graphWidth = graphRect.right - graphRect.left;
+	int graphHeight = graphRect.bottom - graphRect.top;
+
+	// Draw the axis lines
+	MoveToEx(hdc, graphRect.left, graphRect.bottom, nullptr);
+	LineTo(hdc, graphRect.right, graphRect.bottom);
+	MoveToEx(hdc, graphRect.left, graphRect.top, nullptr);
+	LineTo(hdc, graphRect.left, graphRect.bottom);
+
+	// Draw tick values
+	const int tickCount = 10;
+	TCHAR text[64] = { 0 };
+	for (int i = 0; i <= tickCount; ++i) {
+		double value = (max.x * i) / tickCount;
+		int x = graphRect.left + (int)((double)i / tickCount * graphWidth);
+		sprintf_s(text, "%.1f", value);
+		TextOut(hdc, x - textSize.cx / 2, graphRect.bottom + yTextPad, text, lstrlen(text));
+	}
+	for (int i = 0; i <= tickCount; ++i) {
+		double value = (max.y * i) / tickCount;
+		int y = graphRect.bottom - (int)((double)i / tickCount * graphHeight);
+		sprintf_s(text, "%.1f", value);
+		TextOut(hdc, 0, y - textSize.cy / 2, text, lstrlen(text));
+	}
+
+	// Draw grid lines
+	HPEN oldPen = (HPEN)SelectObject(hdc, gridLinePen);
+	for (int i = 1; i <= tickCount; ++i) {
+		int x = graphRect.left + (int)((double)i / tickCount * graphWidth);
+		MoveToEx(hdc, x, graphRect.bottom - 1, nullptr);
+		LineTo(hdc, x, graphRect.top);
+	}
+	for (int i = 1; i <= tickCount; ++i) {
+		int y = graphRect.bottom - (int)((double)i / tickCount * graphHeight);
+		MoveToEx(hdc, graphRect.left + 1, y, nullptr);
+		LineTo(hdc, graphRect.right, y);
+	}
+	SelectObject(hdc, oldPen);
+
+	// Draw line segments
 	for (int i = 0; i < 4; ++i) {
-		Point2i p1 = mapGraphToScreen(rc, points[i], max);
-		Point2i p2 = mapGraphToScreen(rc, points[i + 1], max);
+		Point2i p1 = mapGraphToScreen(graphRect, points[i], max);
+		Point2i p2 = mapGraphToScreen(graphRect, points[i + 1], max);
 
 		MoveToEx(hdc, p1.x, p1.y, nullptr);
 		LineTo(hdc, p2.x, p2.y);
 	}
 
+	// Draw circles on each point
+	HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, circleBrush);
 	for (int i = 0; i < 5; ++i) {
-		Point2i p = mapGraphToScreen(rc, points[i], max);
+		Point2i p = mapGraphToScreen(graphRect, points[i], max);
 		Ellipse(hdc, p.x - 5, p.y - 5, p.x + 5, p.y + 5);
 	}
+	SelectObject(hdc, oldBrush);
 }
 
 
