@@ -6,6 +6,7 @@
  */
 
 #include <windows.h>
+#include <windowsx.h>
 #include <CommCtrl.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -34,9 +35,14 @@ using Point2d = Point2<double>;
 
 constexpr auto MAX_LOADSTRING = 100;
 CHAR szTitle[MAX_LOADSTRING];
-HWND graph;
-static Point2d points[5];
+constexpr auto NUM_POINTS = 5;
+static Point2d points[NUM_POINTS];
+static HWND graph;
+static RECT graphRect;
+static bool hasGraphRect = false;
+static int xTextPad, yTextPad;
 static int dragIndex = -1;
+constexpr auto CIRCLE_SIZE = 5;
 static HPEN gridLinePen = CreatePen(PS_SOLID, 1, RGB(220, 220, 220));
 static HBRUSH circleBrush = CreateSolidBrush(RGB(100, 100, 100));
 
@@ -49,9 +55,19 @@ static uint32_t doubleToFixed(double value) {
 	return (uint32_t)std::round(value * 65536.0);
 }
 
+static LSTATUS saveCurveToRegistry(HWND hwnd);
+static LSTATUS saveCurveToRegistry(HWND hwnd);
+static Point2i mapGraphToScreen(RECT rc, Point2d input);
+static Point2d mapScreenToGraph(RECT rc, Point2i input);
+static void updateEditBox(HWND hwnd, int i);
+static bool updatePointFromEdit(HWND hwnd, int index);
+static void drawGraph(HWND hwnd, HDC hdc, RECT rc);
+LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR);
 
 
-static void showError(HWND hWnd, const CHAR* action, LSTATUS status) {
+
+static void showError(HWND hwnd, const CHAR* action, LSTATUS status) {
 	LPTSTR systemMessage = nullptr;
 
 	FormatMessage(
@@ -70,11 +86,11 @@ static void showError(HWND hWnd, const CHAR* action, LSTATUS status) {
 		LocalFree(systemMessage);
 	}
 
-	MessageBox(hWnd, buffer, "Error", MB_ICONERROR);
+	MessageBox(hwnd, buffer, "Error", MB_ICONERROR);
 }
 
 
-static LSTATUS loadCurveFromRegistry() {
+static LSTATUS loadCurveFromRegistry(HWND hwnd) {
 	HKEY key;
 	LSTATUS status;
 
@@ -97,19 +113,21 @@ static LSTATUS loadCurveFromRegistry() {
 	}
 	RegCloseKey(key);
 
-	for (int i = 0; i < 5; ++i) {
+	for (int i = 0; i < NUM_POINTS; ++i) {
 		uint32_t xv = *(uint32_t*)(xData + i * 8);
 		uint32_t yv = *(uint32_t*)(yData + i * 8);
 
 		points[i].x = fixedToDouble(xv);
 		points[i].y = fixedToDouble(yv);
+
+		updateEditBox(hwnd, i);
 	}
 
 	return ERROR_SUCCESS;
 }
 
 
-static LSTATUS saveCurveToRegistry() {
+static LSTATUS saveCurveToRegistry(HWND) {
 	HKEY key;
 	LSTATUS status;
 
@@ -117,9 +135,9 @@ static LSTATUS saveCurveToRegistry() {
 		return status;
 	}
 
-	uint32_t xData[5];
-	uint32_t yData[5];
-	for (int i = 0; i < 5; ++i) {
+	uint32_t xData[NUM_POINTS];
+	uint32_t yData[NUM_POINTS];
+	for (int i = 0; i < NUM_POINTS; ++i) {
 		xData[i] = doubleToFixed(points[i].x);
 		yData[i] = doubleToFixed(points[i].y);
 	}
@@ -143,7 +161,8 @@ static LSTATUS saveCurveToRegistry() {
 }
 
 
-static Point2i mapGraphToScreen(RECT rc, Point2d input, Point2d max) {
+static Point2i mapGraphToScreen(RECT rc, Point2d input) {
+	Point2d max = points[NUM_POINTS - 1];
 	return {
 		rc.left + (int)((input.x / max.x) * (rc.right - rc.left)),
 		rc.bottom - (int)((input.y / max.y) * (rc.bottom - rc.top))
@@ -151,7 +170,8 @@ static Point2i mapGraphToScreen(RECT rc, Point2d input, Point2d max) {
 }
 
 
-static Point2d mapScreenToGraph(RECT rc, Point2i input, Point2d max) {
+static Point2d mapScreenToGraph(RECT rc, Point2i input) {
+	Point2d max = points[NUM_POINTS - 1];
 	Point2d p;
 	p.x = ((input.x - rc.left) / static_cast<double>(rc.right - rc.left)) * max.x;
 	p.y = ((rc.bottom - input.y) / static_cast<double>(rc.bottom - rc.top)) * max.y;
@@ -161,21 +181,38 @@ static Point2d mapScreenToGraph(RECT rc, Point2i input, Point2d max) {
 }
 
 
-static void drawGraph(HDC hdc, RECT rc) {
+static void updateEditBox(HWND hwnd, int index) {
+	TCHAR text[128];
+	sprintf_s(text, "%.3g, %.8g", points[index].x, points[index].y);
+	SetDlgItemText(hwnd, IDC_EDIT1 + index, text);
+}
+
+
+static bool updatePointFromEdit(HWND hwnd, int index) {
+	TCHAR text[128];
+
+	GetDlgItemText(hwnd, IDC_EDIT1 + index, text, _countof(text));
+
+	double x, y;
+	if (sscanf_s(text, "%lf, %lf", &x, &y) != 2) {
+		return false;
+	}
+
+	points[index].x = x;
+	points[index].y = y;
+
+	return true;
+}
+
+
+static void drawGraph(HWND hwnd, HDC hdc, RECT rc) {
 	FillRect(hdc, &rc, (HBRUSH)GetStockObject(WHITE_BRUSH));
 	SetBkMode(hdc, TRANSPARENT);
+	HFONT font = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
+	HFONT oldFont = (HFONT)SelectObject(hdc, font);
 
-	Point2d max = points[4];
 	SIZE textSize;
 	GetTextExtentPoint32(hdc, "000.0", 5, &textSize);
-	int xTextPad = (int)(textSize.cx * 0.25);
-	int yTextPad = (int)(textSize.cy * 0.25);
-	RECT graphRect = {
-		rc.left + textSize.cx + xTextPad,
-		rc.top + textSize.cy,
-		rc.right - textSize.cx,
-		rc.bottom - textSize.cy - yTextPad
-	};
 	int graphWidth = graphRect.right - graphRect.left;
 	int graphHeight = graphRect.bottom - graphRect.top;
 
@@ -187,6 +224,7 @@ static void drawGraph(HDC hdc, RECT rc) {
 
 	// Draw tick values
 	const int tickCount = 10;
+	Point2d max = points[NUM_POINTS - 1];
 	TCHAR text[64] = { 0 };
 	for (int i = 0; i <= tickCount; ++i) {
 		double value = (max.x * i) / tickCount;
@@ -216,9 +254,9 @@ static void drawGraph(HDC hdc, RECT rc) {
 	SelectObject(hdc, oldPen);
 
 	// Draw line segments
-	for (int i = 0; i < 4; ++i) {
-		Point2i p1 = mapGraphToScreen(graphRect, points[i], max);
-		Point2i p2 = mapGraphToScreen(graphRect, points[i + 1], max);
+	for (int i = 0; i < NUM_POINTS - 1; ++i) {
+		Point2i p1 = mapGraphToScreen(graphRect, points[i]);
+		Point2i p2 = mapGraphToScreen(graphRect, points[i + 1]);
 
 		MoveToEx(hdc, p1.x, p1.y, nullptr);
 		LineTo(hdc, p2.x, p2.y);
@@ -226,108 +264,107 @@ static void drawGraph(HDC hdc, RECT rc) {
 
 	// Draw circles on each point
 	HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, circleBrush);
-	for (int i = 0; i < 5; ++i) {
-		Point2i p = mapGraphToScreen(graphRect, points[i], max);
-		Ellipse(hdc, p.x - 5, p.y - 5, p.x + 5, p.y + 5);
+	for (int i = 0; i < NUM_POINTS; ++i) {
+		Point2i p = mapGraphToScreen(graphRect, points[i]);
+		Ellipse(hdc, p.x - CIRCLE_SIZE, p.y - CIRCLE_SIZE, p.x + CIRCLE_SIZE, p.y + CIRCLE_SIZE);
 	}
 	SelectObject(hdc, oldBrush);
+	SelectObject(hdc, oldFont);
 }
 
 
-LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	LSTATUS status;
-	switch (uMsg) {
+	switch (msg) {
 		case WM_INITDIALOG: {
-			HICON hIcon = LoadIcon((HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE), MAKEINTRESOURCE(IDI_MAIN_ICON));
-			SendMessage(hWnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
-			SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
-			graph = GetDlgItem(hWnd, IDC_GRAPH);
-			if ((status = loadCurveFromRegistry()) != ERROR_SUCCESS) {
-				showError(hWnd, "Load from registry", status);
+			HICON hIcon = LoadIcon((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), MAKEINTRESOURCE(IDI_MAIN_ICON));
+			SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+			SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+			graph = GetDlgItem(hwnd, IDC_GRAPH);
+			SetWindowSubclass(graph, graphSubclassProc, 0, 0);
+			if ((status = loadCurveFromRegistry(hwnd)) != ERROR_SUCCESS) {
+				showError(hwnd, "Load from registry", status);
 			}
 			break;
 		}
 		case WM_COMMAND: {
-			switch (LOWORD(wParam)) {
+			int id = LOWORD(wParam);
+			int code = HIWORD(wParam);
+
+			switch (id) {
 				case IDC_LOAD:
-					if ((status = loadCurveFromRegistry()) == ERROR_SUCCESS) {
-						InvalidateRect(GetDlgItem(hWnd, IDC_GRAPH), nullptr, TRUE);
+					if ((status = loadCurveFromRegistry(hwnd)) == ERROR_SUCCESS) {
+						InvalidateRect(GetDlgItem(hwnd, IDC_GRAPH), nullptr, TRUE);
 					}
 					else {
-						showError(hWnd, "Load from registry", status);
+						showError(hwnd, "Load from registry", status);
 					}
-					break;
-
+					return TRUE;
 				case IDC_SAVE:
-					if ((status = saveCurveToRegistry()) != ERROR_SUCCESS) {
-						showError(hWnd, "Save to registry", status);
+					if ((status = saveCurveToRegistry(hwnd)) != ERROR_SUCCESS) {
+						showError(hwnd, "Save to registry", status);
 					}
-					break;
-
+					return TRUE;
 				case IDCANCEL:
-					EndDialog(hWnd, 0);
-					break;
+					EndDialog(hwnd, 0);
+					return TRUE;
+			}
+
+			if (id >= IDC_EDIT1 && id <= IDC_EDIT5) {
+				if (code == EN_KILLFOCUS || code == EN_UPDATE) {
+					if (updatePointFromEdit(hwnd, id - IDC_EDIT1)) {
+						InvalidateRect(graph, nullptr, TRUE);
+					}
+					else {
+						updateEditBox(hwnd, id - IDC_EDIT1);
+					}
+				}
+				return TRUE;
 			}
 			break;
 		}
+		default:
+			return DefWindowProc(hwnd, msg, wParam, lParam);
+	}
+	return 0;
+}
+
+
+LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+	switch (msg) {
 		case WM_LBUTTONDOWN: {
 			RECT rc;
-			GetWindowRect(graph, &rc);
+			GetClientRect(hwnd, &rc);
+			MapWindowPoints(nullptr, hwnd, (LPPOINT)&rc, 2);
+			Point2i mousePos = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 
-			MapWindowPoints(nullptr, hWnd, (LPPOINT)&rc, 2);
+			for (int i = 0; i < NUM_POINTS; ++i) {
+				Point2i p = mapGraphToScreen(graphRect, points[i]);
 
-			/*int mx = GET_X_LPARAM(lParam);
-			int my = GET_Y_LPARAM(lParam);
+				int dx = mousePos.x - p.x;
+				int dy = mousePos.y - p.y;
 
-			for (int i = 0; i < 5; ++i) {
-				int px, py;
-
-				graphToScreen(
-					rc,
-					g_points[i].x,
-					g_points[i].y,
-					px,
-					py
-				);
-
-				int dx = mx - px;
-				int dy = my - py;
-
-				if ((dx * dx + dy * dy) < 100) {
-					g_dragIndex = i;
+				if ((dx * dx + dy * dy) < CIRCLE_SIZE) {
+					dragIndex = i;
 					SetCapture(hwnd);
 					break;
 				}
-			}*/
-			break;
+			}
+			return 0;
 		}
 		case WM_MOUSEMOVE: {
-			/*if (dragIndex >= 0) {
+			if (dragIndex >= 0) {
 				RECT rc;
-				GetWindowRect(graph, &rc);
+				GetClientRect(hwnd, &rc);
+				MapWindowPoints(nullptr, hwnd, (LPPOINT)&rc, 2);
+				Point2i mousePos = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 
-				MapWindowPoints(
-					nullptr,
-					hwnd,
-					(LPPOINT)&rc,
-					2
-				);
+				Point2d p = mapScreenToGraph(graphRect, mousePos);
+				points[dragIndex].x = p.x;
+				points[dragIndex].y = p.y;
 
-				double x, y;
-
-				screenToGraph(
-					rc,
-					GET_X_LPARAM(lParam),
-					GET_Y_LPARAM(lParam),
-					x,
-					y
-				);
-
-				g_points[g_dragIndex].x = x;
-				g_points[g_dragIndex].y = y;
-
-				InvalidateRect(graph, nullptr, TRUE);
-			}*/
+				InvalidateRect(hwnd, nullptr, TRUE);
+			}
 			break;
 		}
 		case WM_LBUTTONUP: {
@@ -335,19 +372,31 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 			ReleaseCapture();
 			return TRUE;
 		}
-		case WM_DRAWITEM: {
-			DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)lParam;
+		case WM_PAINT: {
+			PAINTSTRUCT ps;
+			HDC hdc = BeginPaint(hwnd, &ps);
 
-			if (dis->CtlID == IDC_GRAPH) {
-				drawGraph(dis->hDC, dis->rcItem);
-				return TRUE;
+			RECT rc;
+			GetClientRect(hwnd, &rc);
+			if (!hasGraphRect) {
+				SIZE textSize;
+				GetTextExtentPoint32(hdc, "000.0", 5, &textSize);
+				xTextPad = (int)(textSize.cx * 0.25);
+				yTextPad = (int)(textSize.cy * 0.25);
+				graphRect = {
+					rc.left + textSize.cx + xTextPad,
+					rc.top + textSize.cy,
+					rc.right - textSize.cx,
+					rc.bottom - textSize.cy - yTextPad
+				};
+				hasGraphRect = true;
 			}
-			break;
+			drawGraph(hwnd, hdc, rc);
+			EndPaint(hwnd, &ps);
+			return 0;
 		}
-		default:
-			return DefWindowProc(hWnd, uMsg, wParam, lParam);
 	}
-	return 0;
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 
@@ -359,5 +408,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
 	
-	return (int)DialogBox(hInstance, MAKEINTRESOURCE(ID_MAIN_WINDOW), nullptr, WindowProc);
+	return (int)DialogBox(hInstance, MAKEINTRESOURCE(ID_MAIN_WINDOW), nullptr, windowProc);
 }
