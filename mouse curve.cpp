@@ -78,7 +78,7 @@ static void showError(HWND hwnd, const CHAR* action, LSTATUS status) {
 		FORMAT_MESSAGE_FROM_SYSTEM |
 		FORMAT_MESSAGE_IGNORE_INSERTS,
 		nullptr, status, 0,
-		systemMessage, 0,
+		(LPTSTR)systemMessage, 0,
 		nullptr
 	);
 
