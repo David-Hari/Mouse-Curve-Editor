@@ -1,8 +1,5 @@
 /*
  * Simple program to view and edit the mouse acceleration curve in Windows.
- * To compile:
- *  > rc app.rc
- *  > cl "mouse curve.c" app.res /link user32.lib shell32.lib advapi32.lib /SUBSYSTEM:WINDOWS
  */
 
 #include <windows.h>
@@ -39,7 +36,7 @@ constexpr auto NUM_POINTS = 5;
 static Point2d points[NUM_POINTS];
 static HWND mainWindow;
 static HWND graph;
-static bool hasGraphRect = false;
+static RECT graphMargins;
 static int graphXPad, graphYPad, textXPad, textYPad;
 static int dragIndex = -1;
 static Point2i mouseOffset = { 0, 0 };
@@ -211,6 +208,24 @@ static bool updatePointFromEdit(int index) {
 }
 
 
+static void updateGraphMetrics(HWND hwnd) {
+	HDC hdc = GetDC(hwnd);
+
+	HFONT font = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
+	HFONT oldFont = (HFONT)SelectObject(hdc, font);
+
+	SIZE textSize = getGraphTextExtent(hdc);
+
+	graphXPad = (int)(textSize.cx * 1.5);
+	graphYPad = (int)(textSize.cy * 1.5);
+	textXPad = (int)(textSize.cx * 0.25);
+	textYPad = (int)(textSize.cy * 0.25);
+
+	SelectObject(hdc, oldFont);
+	ReleaseDC(hwnd, hdc);
+}
+
+
 static SIZE getGraphTextExtent(HDC hdc) {
 	SIZE textSize = { 0 };
 	GetTextExtentPoint32(hdc, "000.0", 5, &textSize);
@@ -294,21 +309,36 @@ static void drawGraph(HWND hwnd, HDC hdc, RECT rc) {
 }
 
 
-LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	LSTATUS status;
 	switch (msg) {
 		case WM_INITDIALOG: {
 			HICON hIcon = LoadIcon((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), MAKEINTRESOURCE(IDI_MAIN_ICON));
 			SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
 			SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+
 			mainWindow = hwnd;
 			graph = GetDlgItem(hwnd, IDC_GRAPH);
 			SetWindowSubclass(graph, graphSubclassProc, 0, 0);
+
+			updateGraphMetrics(graph);
+
+			RECT windowRect;
+			GetClientRect(hwnd, &windowRect);
+			RECT graphRect;
+			GetWindowRect(graph, &graphRect);
+			MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&graphRect, 2);
+			graphMargins.left = graphRect.left - windowRect.left;
+			graphMargins.top = graphRect.top - windowRect.top;
+			graphMargins.right = windowRect.right - graphRect.right;
+			graphMargins.bottom = windowRect.bottom - graphRect.bottom;
+
 			circleSize = GetDpiForWindow(hwnd) * CIRCLE_SIZE / 96;
+
 			if ((status = loadCurveFromRegistry(hwnd)) != ERROR_SUCCESS) {
 				showError(hwnd, "Load from registry", status);
 			}
-			break;
+			return TRUE;
 		}
 		case WM_COMMAND: {
 			int id = LOWORD(wParam);
@@ -346,10 +376,22 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 			break;
 		}
-		default:
-			return DefWindowProc(hwnd, msg, wParam, lParam);
+		case WM_SIZE: {
+			if (!graph) {
+				return FALSE;
+			}
+			RECT rc;
+			GetClientRect(hwnd, &rc);
+			int newWidth = rc.right - graphMargins.left - graphMargins.right;
+			int newHeight = rc.bottom - graphMargins.top - graphMargins.bottom;
+			SetWindowPos(graph, nullptr, 0, 0, newWidth, newHeight, SWP_NOMOVE | SWP_NOZORDER);
+			updateGraphMetrics(graph);
+			InvalidateRect(graph, nullptr, TRUE);
+
+			return TRUE;
+		}
 	}
-	return 0;
+	return FALSE;
 }
 
 
@@ -409,14 +451,6 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 			RECT rc;
 			HDC hdc = BeginPaint(hwnd, &ps);
 			GetClientRect(hwnd, &rc);
-			if (!hasGraphRect) {
-				SIZE textSize = getGraphTextExtent(hdc);
-				graphXPad = (int)(textSize.cx * 1.5);
-				graphYPad = (int)(textSize.cy * 1.5);
-				textXPad = (int)(textSize.cx * 0.25);
-				textYPad = (int)(textSize.cy * 0.25);
-				hasGraphRect = true;
-			}
 			drawGraph(hwnd, hdc, rc);
 			EndPaint(hwnd, &ps);
 			return 0;
