@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <cmath>
+#include <hidusage.h>
 #include "resource.h"
 
 #pragma comment(linker, \
@@ -26,20 +27,26 @@ struct Point2 {
 	T y;
 };
 
-using Point2i = Point2<int>;
-using Point2d = Point2<double>;
 
-
+// Window
 constexpr auto MAX_LOADSTRING = 100;
 CHAR szTitle[MAX_LOADSTRING];
-constexpr auto NUM_POINTS = 5;
-static Point2d points[NUM_POINTS];
 static HWND mainWindow;
 static HWND graph;
 static RECT graphMargins;
 static int graphXPad, graphYPad, textXPad, textYPad;
 static int dragIndex = -1;
-static Point2i mouseOffset = { 0, 0 };
+
+// Mouse
+constexpr auto NUM_POINTS = 5;
+static Point2<double> points[NUM_POINTS];
+static Point2<int> mouseOffset = { 0, 0 };
+static Point2<uint64_t> rawCounts = { 0, 0 };
+static LARGE_INTEGER perfFreq;
+static LARGE_INTEGER lastRawTime;
+BYTE inputBuffer[sizeof(RAWINPUT)];
+
+// Drawing
 constexpr auto CIRCLE_SIZE = 4;  // Pixels at 100% DPI scale
 static int circleSize = CIRCLE_SIZE;
 static HPEN gridLinePen = CreatePen(PS_SOLID, 1, RGB(220, 220, 220));
@@ -56,8 +63,8 @@ static uint32_t doubleToFixed(double value) {
 
 static LSTATUS saveCurveToRegistry(HWND hwnd);
 static LSTATUS saveCurveToRegistry(HWND hwnd);
-static Point2i mapGraphToScreen(RECT rc, Point2d input);
-static Point2d mapScreenToGraph(RECT rc, Point2i input);
+static Point2<int> mapGraphToScreen(RECT rc, Point2<double> input);
+static Point2<double> mapScreenToGraph(RECT rc, Point2<int> input);
 static void updateEditBox(int i);
 static bool updatePointFromEdit(int index);
 static SIZE getGraphTextExtent(HDC hdc);
@@ -163,8 +170,8 @@ static LSTATUS saveCurveToRegistry(HWND) {
 }
 
 
-static Point2i mapGraphToScreen(RECT rc, Point2d input) {
-	Point2d max = points[NUM_POINTS - 1];
+static Point2<int> mapGraphToScreen(RECT rc, Point2<double> input) {
+	Point2<double> max = points[NUM_POINTS - 1];
 	return {
 		rc.left + (int)((input.x / max.x) * (rc.right - rc.left)),
 		rc.bottom - (int)((input.y / max.y) * (rc.bottom - rc.top))
@@ -172,9 +179,9 @@ static Point2i mapGraphToScreen(RECT rc, Point2d input) {
 }
 
 
-static Point2d mapScreenToGraph(RECT rc, Point2i input) {
-	Point2d max = points[NUM_POINTS - 1];
-	Point2d p = {
+static Point2<double> mapScreenToGraph(RECT rc, Point2<int> input) {
+	Point2<double> max = points[NUM_POINTS - 1];
+	Point2<double> p = {
 		((input.x - rc.left) / static_cast<double>(rc.right - rc.left)) * max.x,
 		((rc.bottom - input.y) / static_cast<double>(rc.bottom - rc.top)) * max.y
 	};
@@ -260,7 +267,7 @@ static void drawGraph(HWND hwnd, HDC hdc, RECT rc) {
 	int graphHeight = graphRect.bottom - graphRect.top;
 
 	// Draw tick values
-	Point2d max = points[NUM_POINTS - 1];
+	Point2<double> max = points[NUM_POINTS - 1];
 	TCHAR text[64] = { 0 };
 	for (int i = 0; i <= tickCount; ++i) {
 		double value = (max.x * i) / tickCount;
@@ -291,8 +298,8 @@ static void drawGraph(HWND hwnd, HDC hdc, RECT rc) {
 
 	// Draw line segments
 	for (int i = 0; i < NUM_POINTS - 1; ++i) {
-		Point2i p1 = mapGraphToScreen(graphRect, points[i]);
-		Point2i p2 = mapGraphToScreen(graphRect, points[i + 1]);
+		Point2<int> p1 = mapGraphToScreen(graphRect, points[i]);
+		Point2<int> p2 = mapGraphToScreen(graphRect, points[i + 1]);
 
 		MoveToEx(hdc, p1.x, p1.y, nullptr);
 		LineTo(hdc, p2.x, p2.y);
@@ -301,7 +308,7 @@ static void drawGraph(HWND hwnd, HDC hdc, RECT rc) {
 	// Draw circles on each point
 	HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, circleBrush);
 	for (int i = 0; i < NUM_POINTS; ++i) {
-		Point2i p = mapGraphToScreen(graphRect, points[i]);
+		Point2<int> p = mapGraphToScreen(graphRect, points[i]);
 		Ellipse(hdc, p.x - circleSize, p.y - circleSize, p.x + circleSize, p.y + circleSize);
 	}
 	SelectObject(hdc, oldBrush);
@@ -338,6 +345,14 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			if ((status = loadCurveFromRegistry(hwnd)) != ERROR_SUCCESS) {
 				showError(hwnd, "Load from registry", status);
 			}
+
+			RAWINPUTDEVICE device = {};
+			device.usUsagePage = HID_USAGE_PAGE_GENERIC;
+			device.usUsage = HID_USAGE_GENERIC_MOUSE;
+			device.dwFlags = 0;
+			device.hwndTarget = hwnd;
+			RegisterRawInputDevices(&device, 1, sizeof(device));
+
 			return TRUE;
 		}
 		case WM_COMMAND: {
@@ -376,6 +391,42 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 			break;
 		}
+		case WM_INPUT: {
+			UINT bufferSize = sizeof(inputBuffer);
+			if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, inputBuffer, &bufferSize, sizeof(RAWINPUTHEADER)) != sizeof(RAWINPUT)) {
+				return TRUE;
+			}
+
+			RAWINPUT* raw = (RAWINPUT*)inputBuffer;
+			if (raw->header.dwType == RIM_TYPEMOUSE) {
+				rawCounts.x += abs(raw->data.mouse.lLastX);
+				rawCounts.y += abs(raw->data.mouse.lLastY);
+
+				LARGE_INTEGER now;
+				QueryPerformanceCounter(&now);
+
+				double elapsed = (now.QuadPart - lastRawTime.QuadPart) / (double)perfFreq.QuadPart;
+				if (elapsed >= 0.05) {
+					// https://esreality.com/post/2843527/re-tutorial-how-to-customize-windows-a
+					double counts = sqrt((double)rawCounts.x * rawCounts.x + (double)rawCounts.y * rawCounts.y);
+					double countsPerSecond = counts / elapsed;
+					double mouseVelocity = countsPerSecond / 3.5;
+
+					TCHAR text[64];
+					sprintf_s(text, "%.3g", mouseVelocity);
+					SetDlgItemText(hwnd, IDC_RAW_VEL, text);
+
+					SetDlgItemText(hwnd, IDC_RAW_COUNT, "N/A");
+					SetDlgItemText(hwnd, IDC_CURSOR_VEL, "N/A");
+					SetDlgItemText(hwnd, IDC_GAIN, "N/A");
+
+					rawCounts.x = 0;
+					rawCounts.y = 0;
+					lastRawTime = now;
+				}
+			}
+			return TRUE;
+		}
 		case WM_SIZE: {
 			if (!graph) {
 				return FALSE;
@@ -400,11 +451,11 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 		case WM_LBUTTONDOWN: {
 			RECT rc;
 			GetClientRect(hwnd, &rc);
-			Point2i mousePos = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			Point2<int> mousePos = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 			RECT graphRect = getGraphRect(rc);
 
 			for (int i = 0; i < NUM_POINTS; ++i) {
-				Point2i p = mapGraphToScreen(graphRect, points[i]);
+				Point2<int> p = mapGraphToScreen(graphRect, points[i]);
 
 				int dx = mousePos.x - p.x;
 				int dy = mousePos.y - p.y;
@@ -423,9 +474,9 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 			if (dragIndex >= 0) {
 				RECT rc;
 				GetClientRect(hwnd, &rc);
-				Point2i pos = { GET_X_LPARAM(lParam) - mouseOffset.x, GET_Y_LPARAM(lParam) - mouseOffset.y };
+				Point2<int> pos = { GET_X_LPARAM(lParam) - mouseOffset.x, GET_Y_LPARAM(lParam) - mouseOffset.y };
 
-				Point2d p = mapScreenToGraph(getGraphRect(rc), pos);
+				Point2<double> p = mapScreenToGraph(getGraphRect(rc), pos);
 				points[dragIndex].x = p.x;
 				points[dragIndex].y = p.y;
 
@@ -467,6 +518,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	InitCommonControlsEx(&icc);
 
 	LoadString(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
+	QueryPerformanceFrequency(&perfFreq);
+	QueryPerformanceCounter(&lastRawTime);
 	
 	return (int)DialogBox(hInstance, MAKEINTRESOURCE(ID_MAIN_WINDOW), nullptr, windowProc);
 }
