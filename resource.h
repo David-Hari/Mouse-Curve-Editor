@@ -15,7 +15,7 @@
 #define IDC_EDIT5                       1008
 #define IDC_RAW_VEL                     1009
 #define IDC_RAW_COUNT                   1010
-#define IDC_CURSOR_VEL                  1011
+#define IDC_POINTER_VEL                 1011
 #define IDC_GAIN                        1012
 #define IDC_STATIC                      -1
 #define IDC_BACKGROUND                  -1

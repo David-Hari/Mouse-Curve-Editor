@@ -417,7 +417,7 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					SetDlgItemText(hwnd, IDC_RAW_VEL, text);
 
 					SetDlgItemText(hwnd, IDC_RAW_COUNT, "N/A");
-					SetDlgItemText(hwnd, IDC_CURSOR_VEL, "N/A");
+					SetDlgItemText(hwnd, IDC_POINTER_VEL, "N/A");
 					SetDlgItemText(hwnd, IDC_GAIN, "N/A");
 
 					rawCounts.x = 0;
