@@ -39,7 +39,7 @@ static int dragIndex = -1;
 
 // Mouse
 constexpr auto NUM_POINTS = 5;
-static Point2<double> points[NUM_POINTS];
+static Point2<double> points[NUM_POINTS] = { 0 };
 static Point2<int> mouseOffset = { 0, 0 };
 static Point2<uint64_t> rawCounts = { 0, 0 };
 static LARGE_INTEGER perfFreq;
@@ -192,24 +192,39 @@ static Point2<double> mapScreenToGraph(RECT rc, Point2<int> input) {
 
 
 static void updateEditBox(int index) {
-	TCHAR text[128];
-	sprintf_s(text, "%.3g, %.8g", points[index].x, points[index].y);
-	SetDlgItemText(mainWindow, IDC_EDIT1 + index, text);
+	TCHAR textX[32];
+	TCHAR textY[32];
+	TCHAR textGain[32];
+	sprintf_s(textX, "%.3g", points[index].x);
+	sprintf_s(textY, "%.8g", points[index].y);
+	SetDlgItemText(mainWindow, IDC_EDIT_X1 + index, textX);
+	SetDlgItemText(mainWindow, IDC_EDIT_Y1 + index, textY);
+	if (index > 0) {
+		sprintf_s(textGain, "%.3g", points[index].y / points[index].x);
+		SetDlgItemText(mainWindow, IDC_GAIN1 + (index - 1), textGain);
+	}
 }
 
 
 static bool updatePointFromEdit(int index) {
-	TCHAR text[128];
+	TCHAR textX[32];
+	TCHAR textY[32];
+	TCHAR textGain[32];
 
-	GetDlgItemText(mainWindow, IDC_EDIT1 + index, text, _countof(text));
+	GetDlgItemText(mainWindow, IDC_EDIT_X1 + index, textX, _countof(textX));
+	GetDlgItemText(mainWindow, IDC_EDIT_Y1 + index, textY, _countof(textY));
 
 	double x, y;
-	if (sscanf_s(text, "%lf, %lf", &x, &y) != 2) {
+	if (sscanf_s(textX, "%lf", &x) != 1 || sscanf_s(textY, "%lf", &y) != 1) {
 		return false;
 	}
 
 	points[index].x = x;
 	points[index].y = y;
+	if (index > 0) {
+		sprintf_s(textGain, "%.3g", y / x);
+		SetDlgItemText(mainWindow, IDC_GAIN1 + (index - 1), textGain);
+	}
 
 	return true;
 }
@@ -327,7 +342,6 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			mainWindow = hwnd;
 			graph = GetDlgItem(hwnd, IDC_GRAPH);
 			SetWindowSubclass(graph, graphSubclassProc, 0, 0);
-
 			updateGraphMetrics(graph);
 
 			RECT windowRect;
@@ -378,13 +392,20 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					return TRUE;
 			}
 
-			if (id >= IDC_EDIT1 && id <= IDC_EDIT5) {
-				if (code == EN_KILLFOCUS || code == EN_UPDATE) {
-					if (updatePointFromEdit(id - IDC_EDIT1)) {
+			if (code == EN_KILLFOCUS || code == EN_UPDATE) {
+				int index = -1;
+				if (id >= IDC_EDIT_X1 && id <= IDC_EDIT_X5) {
+					index = id - IDC_EDIT_X1;
+				}
+				else if (id >= IDC_EDIT_Y1 && id <= IDC_EDIT_Y5) {
+					index = id - IDC_EDIT_Y1;
+				}
+				if (index != -1) {
+					if (updatePointFromEdit(index)) {
 						InvalidateRect(graph, nullptr, TRUE);
 					}
 					else {
-						updateEditBox(id - IDC_EDIT1);
+						updateEditBox(index);
 					}
 				}
 				return TRUE;

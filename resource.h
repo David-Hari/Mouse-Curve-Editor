@@ -8,15 +8,24 @@
 #define IDC_GRAPH                       1001
 #define IDC_LOAD                        1002
 #define IDC_SAVE                        1003
-#define IDC_EDIT1                       1004
-#define IDC_EDIT2                       1005
-#define IDC_EDIT3                       1006
-#define IDC_EDIT4                       1007
-#define IDC_EDIT5                       1008
-#define IDC_RAW_VEL                     1009
-#define IDC_RAW_COUNT                   1010
-#define IDC_POINTER_VEL                 1011
-#define IDC_GAIN                        1012
+#define IDC_EDIT_X1                     1004
+#define IDC_EDIT_X2                     1005
+#define IDC_EDIT_X3                     1006
+#define IDC_EDIT_X4                     1007
+#define IDC_EDIT_X5                     1008
+#define IDC_EDIT_Y1                     1009
+#define IDC_EDIT_Y2                     1010
+#define IDC_EDIT_Y3                     1011
+#define IDC_EDIT_Y4                     1012
+#define IDC_EDIT_Y5                     1013
+#define IDC_GAIN1                       1014
+#define IDC_GAIN2                       1015
+#define IDC_GAIN3                       1016
+#define IDC_GAIN4                       1017
+#define IDC_RAW_VEL                     1018
+#define IDC_RAW_COUNT                   1019
+#define IDC_POINTER_VEL                 1020
+#define IDC_GAIN                        1021
 #define IDC_STATIC                      -1
 #define IDC_BACKGROUND                  -1
 
@@ -27,7 +36,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        129
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1013
+#define _APS_NEXT_CONTROL_VALUE         1022
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif
