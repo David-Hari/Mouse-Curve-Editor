@@ -40,14 +40,14 @@ static int dragIndex = -1;
 // Mouse
 constexpr auto NUM_POINTS = 5;
 static Point2<double> points[NUM_POINTS] = { 0 };
-static Point2<int> mouseOffset = { 0, 0 };
-static Point2<uint64_t> rawCounts = { 0, 0 };
 static LARGE_INTEGER perfFreq;
 static LARGE_INTEGER lastRawTime;
-BYTE inputBuffer[sizeof(RAWINPUT)];
+static POINT lastPointerPos;
+BYTE rawInputBuffer[sizeof(RAWINPUT)];
 
 // Drawing
 constexpr auto CIRCLE_SIZE = 4;  // Pixels at 100% DPI scale
+static Point2<int> graphMouseOffset = { 0, 0 };
 static int circleSize = CIRCLE_SIZE;
 static HPEN gridLinePen = CreatePen(PS_SOLID, 1, RGB(220, 220, 220));
 static HBRUSH circleBrush = CreateSolidBrush(RGB(100, 100, 100));
@@ -413,40 +413,59 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			break;
 		}
 		case WM_INPUT: {
-			UINT bufferSize = sizeof(inputBuffer);
-			if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, inputBuffer, &bufferSize, sizeof(RAWINPUTHEADER)) != sizeof(RAWINPUT)) {
-				return TRUE;
+			UINT bufferSize = sizeof(rawInputBuffer);
+			if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, rawInputBuffer, &bufferSize, sizeof(RAWINPUTHEADER)) != sizeof(RAWINPUT)) {
+				return FALSE;
 			}
 
-			RAWINPUT* raw = (RAWINPUT*)inputBuffer;
+			RAWINPUT* raw = (RAWINPUT*)rawInputBuffer;
 			if (raw->header.dwType == RIM_TYPEMOUSE) {
-				rawCounts.x += abs(raw->data.mouse.lLastX);
-				rawCounts.y += abs(raw->data.mouse.lLastY);
+				RAWMOUSE& mouse = raw->data.mouse;
+				POINT mousePos;
+
+				if (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) {
+					// TODO: Below code is from Microsoft documentation, but on my system it always uses MOUSE_MOVE_RELATIVE
+					// so I have not been able to test this.
+					//int absoluteX = MulDiv(mouse.lLastX, GetSystemMetrics(SM_CXSCREEN), USHRT_MAX);
+					//int absoluteY = MulDiv(mouse.lLastY, GetSystemMetrics(SM_CYSCREEN), USHRT_MAX);
+					mousePos.x = 0;
+					mousePos.y = 0;
+				}
+				else {
+					mousePos.x = mouse.lLastX;
+					mousePos.y = mouse.lLastY;
+				}
 
 				LARGE_INTEGER now;
 				QueryPerformanceCounter(&now);
-
 				double elapsed = (now.QuadPart - lastRawTime.QuadPart) / (double)perfFreq.QuadPart;
-				if (elapsed >= 0.05) {
-					// https://esreality.com/post/2843527/re-tutorial-how-to-customize-windows-a
-					double counts = sqrt((double)rawCounts.x * rawCounts.x + (double)rawCounts.y * rawCounts.y);
-					double countsPerSecond = counts / elapsed;
-					double mouseVelocity = countsPerSecond / 3.5;
-
-					TCHAR text[64];
-					sprintf_s(text, "%.3g", mouseVelocity);
-					SetDlgItemText(hwnd, IDC_RAW_VEL, text);
-
-					SetDlgItemText(hwnd, IDC_RAW_COUNT, "N/A");
-					SetDlgItemText(hwnd, IDC_POINTER_VEL, "N/A");
-					SetDlgItemText(hwnd, IDC_GAIN, "N/A");
-
-					rawCounts.x = 0;
-					rawCounts.y = 0;
+				if (elapsed >= 0.1) {
 					lastRawTime = now;
+
+					double distance = sqrt((double)mousePos.x * mousePos.x + (double)mousePos.y * mousePos.y);
+					double velocity = distance / elapsed;
+					TCHAR mouseText[32];
+					sprintf_s(mouseText, "%.3g", velocity);
+					SetDlgItemText(hwnd, IDC_RAW_VEL, mouseText);
+
+					POINT pointerPos, diff;
+					GetCursorPos(&pointerPos);
+					if (pointerPos.x != lastPointerPos.x && pointerPos.y != lastPointerPos.y) {
+						diff.x = mousePos.x - lastPointerPos.x;   // Calculate difference in position since last movement
+						diff.y = mousePos.y - lastPointerPos.y;
+						lastPointerPos = mousePos;
+						distance = sqrt((double)diff.x * diff.x + (double)diff.y * diff.y);
+						velocity = distance / elapsed;
+
+						TCHAR pointerText[32];
+						sprintf_s(pointerText, "%.3g", velocity);
+						SetDlgItemText(hwnd, IDC_POINTER_VEL, pointerText);
+					}
+
+					return TRUE;
 				}
 			}
-			return TRUE;
+			break;
 		}
 		case WM_SIZE: {
 			if (!graph) {
@@ -485,7 +504,7 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 				double dist = circleSize * 1.5;
 				if ((dx * dx + dy * dy) < (dist * dist)) {
 					dragIndex = i;
-					mouseOffset = { dx, dy };
+					graphMouseOffset = { dx, dy };
 					break;
 				}
 			}
@@ -495,7 +514,7 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 			if (dragIndex >= 0) {
 				RECT rc;
 				GetClientRect(hwnd, &rc);
-				Point2<int> pos = { GET_X_LPARAM(lParam) - mouseOffset.x, GET_Y_LPARAM(lParam) - mouseOffset.y };
+				Point2<int> pos = { GET_X_LPARAM(lParam) - graphMouseOffset.x, GET_Y_LPARAM(lParam) - graphMouseOffset.y };
 
 				Point2<double> p = mapScreenToGraph(getGraphRect(rc), pos);
 				points[dragIndex].x = p.x;
@@ -508,7 +527,7 @@ LRESULT CALLBACK graphSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 		}
 		case WM_LBUTTONUP: {
 			dragIndex = -1;
-			mouseOffset = { 0, 0 };
+			graphMouseOffset = { 0, 0 };
 			return TRUE;
 		}
 		case WM_ERASEBKGND: {
