@@ -23,9 +23,7 @@
 #define IDC_GAIN3                       1016
 #define IDC_GAIN4                       1017
 #define IDC_RAW_VEL                     1018
-#define IDC_RAW_COUNT                   1019
-#define IDC_POINTER_VEL                 1020
-#define IDC_GAIN                        1021
+#define IDC_POINTER_VEL                 1019
 #define IDC_STATIC                      -1
 #define IDC_BACKGROUND                  -1
 
@@ -36,7 +34,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        129
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1022
+#define _APS_NEXT_CONTROL_VALUE         1020
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

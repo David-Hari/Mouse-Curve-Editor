@@ -41,7 +41,7 @@ static int dragIndex = -1;
 constexpr auto NUM_POINTS = 5;
 static Point2<double> points[NUM_POINTS] = { 0 };
 static LARGE_INTEGER perfFreq;
-static LARGE_INTEGER lastRawTime;
+static LARGE_INTEGER lastRawTime, lastPointerTime;
 static POINT lastPointerPos;
 BYTE rawInputBuffer[sizeof(RAWINPUT)];
 
@@ -421,49 +421,47 @@ INT_PTR windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			RAWINPUT* raw = (RAWINPUT*)rawInputBuffer;
 			if (raw->header.dwType == RIM_TYPEMOUSE) {
 				RAWMOUSE& mouse = raw->data.mouse;
-				POINT mousePos;
 
+				LARGE_INTEGER now;
+				QueryPerformanceCounter(&now);
+
+				double elapsed = (now.QuadPart - lastRawTime.QuadPart) / (double)perfFreq.QuadPart;
+				lastRawTime = now;
+
+				double distance;
 				if (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) {
 					// TODO: Below code is from Microsoft documentation, but on my system it always uses MOUSE_MOVE_RELATIVE
 					// so I have not been able to test this.
 					//int absoluteX = MulDiv(mouse.lLastX, GetSystemMetrics(SM_CXSCREEN), USHRT_MAX);
 					//int absoluteY = MulDiv(mouse.lLastY, GetSystemMetrics(SM_CYSCREEN), USHRT_MAX);
-					mousePos.x = 0;
-					mousePos.y = 0;
+					distance = 0;
 				}
 				else {
-					mousePos.x = mouse.lLastX;
-					mousePos.y = mouse.lLastY;
+					distance = sqrt((double)mouse.lLastX * mouse.lLastX + (double)mouse.lLastY * mouse.lLastY);
+				}
+				double velocity = distance / elapsed;
+				TCHAR mouseText[32];
+				sprintf_s(mouseText, "%.3g", velocity);
+				SetDlgItemText(hwnd, IDC_RAW_VEL, mouseText);
+
+				POINT pointerPos, diff;
+				GetCursorPos(&pointerPos);
+				if (pointerPos.x != lastPointerPos.x || pointerPos.y != lastPointerPos.y) {
+					elapsed = (now.QuadPart - lastPointerTime.QuadPart) / (double)perfFreq.QuadPart;
+					lastPointerTime = now;
+
+					diff.x = pointerPos.x - lastPointerPos.x;   // Calculate difference in position since last movement
+					diff.y = pointerPos.y - lastPointerPos.y;
+					lastPointerPos = pointerPos;
+					distance = sqrt((double)diff.x * diff.x + (double)diff.y * diff.y);
+					velocity = distance / elapsed;
+
+					TCHAR pointerText[32];
+					sprintf_s(pointerText, "%.3g", velocity);
+					SetDlgItemText(hwnd, IDC_POINTER_VEL, pointerText);
 				}
 
-				LARGE_INTEGER now;
-				QueryPerformanceCounter(&now);
-				double elapsed = (now.QuadPart - lastRawTime.QuadPart) / (double)perfFreq.QuadPart;
-				if (elapsed >= 0.1) {
-					lastRawTime = now;
-
-					double distance = sqrt((double)mousePos.x * mousePos.x + (double)mousePos.y * mousePos.y);
-					double velocity = distance / elapsed;
-					TCHAR mouseText[32];
-					sprintf_s(mouseText, "%.3g", velocity);
-					SetDlgItemText(hwnd, IDC_RAW_VEL, mouseText);
-
-					POINT pointerPos, diff;
-					GetCursorPos(&pointerPos);
-					if (pointerPos.x != lastPointerPos.x && pointerPos.y != lastPointerPos.y) {
-						diff.x = mousePos.x - lastPointerPos.x;   // Calculate difference in position since last movement
-						diff.y = mousePos.y - lastPointerPos.y;
-						lastPointerPos = mousePos;
-						distance = sqrt((double)diff.x * diff.x + (double)diff.y * diff.y);
-						velocity = distance / elapsed;
-
-						TCHAR pointerText[32];
-						sprintf_s(pointerText, "%.3g", velocity);
-						SetDlgItemText(hwnd, IDC_POINTER_VEL, pointerText);
-					}
-
-					return TRUE;
-				}
+				return TRUE;
 			}
 			break;
 		}
